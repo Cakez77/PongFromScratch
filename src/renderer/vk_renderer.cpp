@@ -5,8 +5,10 @@
 #endif
 #include <iostream>
 
+#include "dds_strcuts.h"
 #include "platform.h"
 
+#include "vk_types.h"
 #include "vk_init.cpp"
 
 #define ArraySize(arr) sizeof((arr)) / sizeof((arr[0]))
@@ -45,7 +47,17 @@ struct VkContext
     VkCommandPool commandPool;
     VkCommandBuffer cmd;
 
+    // TODO: Will be inside an array
+    Image image;
+
+    Buffer stagingBuffer;
+
+    VkDescriptorPool descPool;
+
     // TODO: We will abstract this later
+    VkSampler sampler;
+    VkDescriptorSet descSet;
+    VkDescriptorSetLayout setLayout;
     VkPipelineLayout pipeLayout;
     VkPipeline pipeline;
 
@@ -302,11 +314,7 @@ bool vk_init(VkContext *vkcontext, void *window)
 
     // Command Buffer
     {
-        VkCommandBufferAllocateInfo allocInfo = {};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandBufferCount = 1;
-        allocInfo.commandPool = vkcontext->commandPool;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        VkCommandBufferAllocateInfo allocInfo = cmd_alloc_info(vkcontext->commandPool);
         VK_CHECK(vkAllocateCommandBuffers(vkcontext->device, &allocInfo, &vkcontext->cmd));
     }
 
@@ -317,16 +325,32 @@ bool vk_init(VkContext *vkcontext, void *window)
         VK_CHECK(vkCreateSemaphore(vkcontext->device, &semaInfo, 0, &vkcontext->aquireSemaphore));
         VK_CHECK(vkCreateSemaphore(vkcontext->device, &semaInfo, 0, &vkcontext->submitSemaphore));
 
-        VkFenceCreateInfo fenceInfo = {};
-        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        VkFenceCreateInfo fenceInfo = fence_info(VK_FENCE_CREATE_SIGNALED_BIT);
         VK_CHECK(vkCreateFence(vkcontext->device, &fenceInfo, 0, &vkcontext->imgAvailableFence));
+    }
+
+    // Create Descriptor Set Layouts
+    {
+        VkDescriptorSetLayoutBinding binding = {};
+        binding.binding = 0;
+        binding.descriptorCount = 1;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &binding;
+
+        VK_CHECK(vkCreateDescriptorSetLayout(vkcontext->device, &layoutInfo, 0, &vkcontext->setLayout));
     }
 
     // Create Pipeline Layout
     {
         VkPipelineLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &vkcontext->setLayout;
         VK_CHECK(vkCreatePipelineLayout(vkcontext->device, &layoutInfo, 0, &vkcontext->pipeLayout));
     }
 
@@ -353,7 +377,7 @@ bool vk_init(VkContext *vkcontext, void *window)
         viewport.maxDepth = 1.0;
 
         VkRect2D scissor = {};
-        
+
         VkPipelineViewportStateCreateInfo viewportState = {};
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewportState.pViewports = &viewport;
@@ -376,7 +400,7 @@ bool vk_init(VkContext *vkcontext, void *window)
 
         // Vertex Shader
         {
-            int lengthInBytes;
+            uint32_t lengthInBytes;
             uint32_t *vertexCode = (uint32_t *)platform_read_file("assets/shaders/shader.vert.spv", &lengthInBytes);
 
             VkShaderModuleCreateInfo shaderInfo = {};
@@ -390,7 +414,7 @@ bool vk_init(VkContext *vkcontext, void *window)
 
         // Fragment Shader
         {
-            int lengthInBytes;
+            uint32_t lengthInBytes;
             uint32_t *fragmentCode = (uint32_t *)platform_read_file("assets/shaders/shader.frag.spv", &lengthInBytes);
 
             VkShaderModuleCreateInfo shaderInfo = {};
@@ -447,6 +471,201 @@ bool vk_init(VkContext *vkcontext, void *window)
         vkDestroyShaderModule(vkcontext->device, fragmentShader, 0);
     }
 
+    // Staging Buffer
+    {
+        VkBufferCreateInfo bufferInfo = {};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bufferInfo.size = MB(1);
+        VK_CHECK(vkCreateBuffer(vkcontext->device, &bufferInfo, 0, &vkcontext->stagingBuffer.buffer));
+
+        VkMemoryRequirements memRequirements;
+        vkGetBufferMemoryRequirements(vkcontext->device, vkcontext->stagingBuffer.buffer, &memRequirements);
+
+        VkPhysicalDeviceMemoryProperties gpuMemProps;
+        vkGetPhysicalDeviceMemoryProperties(vkcontext->gpu, &gpuMemProps);
+
+        VkMemoryAllocateInfo allocInfo = {};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = MB(1);
+        for (uint32_t i = 0; i < gpuMemProps.memoryTypeCount; i++)
+        {
+            if (memRequirements.memoryTypeBits & (1 << i) &&
+                (gpuMemProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ==
+                    (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+            {
+                allocInfo.memoryTypeIndex = i;
+            }
+        }
+
+        VK_CHECK(vkAllocateMemory(vkcontext->device, &allocInfo, 0, &vkcontext->stagingBuffer.memory));
+        VK_CHECK(vkMapMemory(vkcontext->device, vkcontext->stagingBuffer.memory, 0, MB(1), 0, &vkcontext->stagingBuffer.data));
+        VK_CHECK(vkBindBufferMemory(vkcontext->device, vkcontext->stagingBuffer.buffer, vkcontext->stagingBuffer.memory, 0));
+    }
+
+    // Create Image
+    {
+        uint32_t fileSize;
+        DDSFile *data = (DDSFile *)platform_read_file("assets/textures/cakez.DDS", &fileSize);
+        uint32_t textureSize = data->header.Width * data->header.Height * 4;
+
+        memcpy(vkcontext->stagingBuffer.data, &data->dataBegin, textureSize);
+
+        //TODO: Assertions
+
+        VkImageCreateInfo imgInfo = {};
+        imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imgInfo.mipLevels = 1;
+        imgInfo.arrayLayers = 1;
+        imgInfo.imageType = VK_IMAGE_TYPE_2D;
+        imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        imgInfo.extent = {data->header.Width, data->header.Height, 1};
+        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VK_CHECK(vkCreateImage(vkcontext->device, &imgInfo, 0, &vkcontext->image.image));
+
+        VkMemoryRequirements memRequirements;
+        vkGetImageMemoryRequirements(vkcontext->device, vkcontext->image.image, &memRequirements);
+
+        VkPhysicalDeviceMemoryProperties gpuMemProps;
+        vkGetPhysicalDeviceMemoryProperties(vkcontext->gpu, &gpuMemProps);
+
+        VkMemoryAllocateInfo allocInfo = {};
+        for (uint32_t i = 0; i < gpuMemProps.memoryTypeCount; i++)
+        {
+            if (memRequirements.memoryTypeBits & (1 << i) &&
+                (gpuMemProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+            {
+                allocInfo.memoryTypeIndex = i;
+            }
+        }
+
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = textureSize;
+        VK_CHECK(vkAllocateMemory(vkcontext->device, &allocInfo, 0, &vkcontext->image.memory));
+        VK_CHECK(vkBindImageMemory(vkcontext->device, vkcontext->image.image, vkcontext->image.memory, 0));
+
+        VkCommandBuffer cmd;
+        VkCommandBufferAllocateInfo cmdAlloc = cmd_alloc_info(vkcontext->commandPool);
+        VK_CHECK(vkAllocateCommandBuffers(vkcontext->device, &cmdAlloc, &cmd));
+
+        VkCommandBufferBeginInfo beginInfo = cmd_begin_info();
+        VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
+
+        VkImageSubresourceRange range = {};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.layerCount = 1;
+        range.levelCount = 1;
+
+        // Transition Layout to Transfer optimal
+        VkImageMemoryBarrier imgMemBarrier = {};
+        imgMemBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        imgMemBarrier.image = vkcontext->image.image;
+        imgMemBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imgMemBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        imgMemBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        imgMemBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        imgMemBarrier.subresourceRange = range;
+
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0,
+                             1, &imgMemBarrier);
+
+        VkBufferImageCopy copyRegion = {};
+        copyRegion.imageExtent = {data->header.Width, data->header.Height, 1};
+        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vkCmdCopyBufferToImage(cmd, vkcontext->stagingBuffer.buffer, vkcontext->image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+        imgMemBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        imgMemBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imgMemBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        imgMemBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0,
+                             1, &imgMemBarrier);
+
+        VK_CHECK(vkEndCommandBuffer(cmd));
+
+        VkFence uploadFence;
+        VkFenceCreateInfo fenceInfo = fence_info();
+        VK_CHECK(vkCreateFence(vkcontext->device, &fenceInfo, 0, &uploadFence));
+
+        VkSubmitInfo submitInfo = submit_info(&cmd);
+        VK_CHECK(vkQueueSubmit(vkcontext->graphicsQueue, 1, &submitInfo, uploadFence));
+
+        VK_CHECK(vkWaitForFences(vkcontext->device, 1, &uploadFence, true, UINT64_MAX));
+    }
+
+    // Create Image View
+    {
+        VkImageViewCreateInfo viewInfo = {};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = vkcontext->image.image;
+        viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.layerCount = 1;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+
+        VK_CHECK(vkCreateImageView(vkcontext->device, &viewInfo, 0, &vkcontext->image.view));
+    }
+
+    // Create Sampler
+    {
+        VkSamplerCreateInfo samplerInfo = {};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.minFilter = VK_FILTER_NEAREST;
+        samplerInfo.magFilter = VK_FILTER_NEAREST;
+
+        VK_CHECK(vkCreateSampler(vkcontext->device, &samplerInfo, 0, &vkcontext->sampler));
+    }
+
+    // Create Descriptor Pool
+    {
+        VkDescriptorPoolSize poolSize = {};
+        poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSize.descriptorCount = 1;
+
+        VkDescriptorPoolCreateInfo poolInfo = {};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.maxSets = 1;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        VK_CHECK(vkCreateDescriptorPool(vkcontext->device, &poolInfo, 0, &vkcontext->descPool));
+    }
+
+    // Create Descriptor Set
+    {
+        VkDescriptorSetAllocateInfo allocInfo = {};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.pSetLayouts = &vkcontext->setLayout;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.descriptorPool = vkcontext->descPool;
+        VK_CHECK(vkAllocateDescriptorSets(vkcontext->device, &allocInfo, &vkcontext->descSet));
+    }
+
+    // Update Descriptor Set
+    {
+        VkDescriptorImageInfo imgInfo = {};
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imgInfo.imageView = vkcontext->image.view;
+        imgInfo.sampler = vkcontext->sampler;
+
+        VkWriteDescriptorSet write = {};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = vkcontext->descSet;
+        write.pImageInfo = &imgInfo;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+
+        vkUpdateDescriptorSets(vkcontext->device, 1, &write, 0, 0);
+    }
+
     return true;
 }
 
@@ -493,8 +712,11 @@ bool vk_render(VkContext *vkcontext)
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeLayout,
+                                0, 1, &vkcontext->descSet, 0, 0);
+
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeline);
-        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdDraw(cmd, 6, 1, 0, 0);
         // Actually draw
         // Bind pipe
         // Bind desc
@@ -508,16 +730,13 @@ bool vk_render(VkContext *vkcontext)
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-    VkSubmitInfo submitInfo = {};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    // This call will signal the Fence when the GPU Work is done
+    VkSubmitInfo submitInfo = submit_info(&cmd);
     submitInfo.pWaitDstStageMask = &waitStage;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
     submitInfo.pSignalSemaphores = &vkcontext->submitSemaphore;
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = &vkcontext->aquireSemaphore;
     submitInfo.waitSemaphoreCount = 1;
-    // This call will signal the Fence when the GPU Work is done
     VK_CHECK(vkQueueSubmit(vkcontext->graphicsQueue, 1, &submitInfo, vkcontext->imgAvailableFence));
 
     VkPresentInfoKHR presentInfo = {};

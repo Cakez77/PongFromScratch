@@ -15,7 +15,7 @@ uint32_t vk_get_memory_type_index(
 
     VkMemoryAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = MB(1);
+    allocInfo.allocationSize = memRequirements.size;
     for (uint32_t i = 0; i < gpuMemProps.memoryTypeCount; i++)
     {
         if (memRequirements.memoryTypeBits & (1 << i) &&

@@ -28,7 +28,7 @@ VkFenceCreateInfo fence_info(VkFenceCreateFlags flags = 0)
     return info;
 }
 
-VkSubmitInfo submit_info(VkCommandBuffer* cmd, uint32_t cmdCount = 1)
+VkSubmitInfo submit_info(VkCommandBuffer *cmd, uint32_t cmdCount = 1)
 {
     VkSubmitInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -36,4 +36,38 @@ VkSubmitInfo submit_info(VkCommandBuffer* cmd, uint32_t cmdCount = 1)
     info.pCommandBuffers = cmd;
 
     return info;
+}
+
+VkDescriptorSetLayoutBinding layout_binding(
+    VkDescriptorType type,
+    VkShaderStageFlags shaderStages,
+    uint32_t count,
+    uint32_t bindingNumber)
+{
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.binding = bindingNumber;
+    binding.descriptorCount = count;
+    binding.descriptorType = type;
+    binding.stageFlags = shaderStages;
+
+    return binding;
+}
+
+VkWriteDescriptorSet write_set(
+    VkDescriptorSet set,
+    VkDescriptorType type,
+    DescriptorInfo *descInfo,
+    uint32_t bindingNumber,
+    uint32_t count)
+{
+    VkWriteDescriptorSet write = {};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.pImageInfo = &descInfo->imageInfo;
+    write.pBufferInfo = &descInfo->bufferInfo;
+    write.dstBinding = bindingNumber;
+    write.descriptorCount = count;
+    write.descriptorType = type;
+
+    return write;
 }

@@ -13,6 +13,7 @@
 
 struct Image
 {
+    AssetTypeID assetTypeID;
     VkImage image;
     VkImageView view;
     VkDeviceMemory memory;
@@ -54,4 +55,17 @@ struct DescriptorInfo
         bufferInfo.offset = offset;
         bufferInfo.range = range;
     }
+};
+
+struct Descriptor
+{
+    VkDescriptorSet set;
+    AssetTypeID assetTypeID;
+};
+
+struct RenderCommand
+{
+    PushData pushData;
+    uint32_t instanceCount;
+    Descriptor *desc;
 };

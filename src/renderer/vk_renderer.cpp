@@ -13,6 +13,10 @@
 #include "vk_util.cpp"
 #include "vk_shader_util.cpp"
 
+uint32_t constexpr MAX_IMAGES = 100;
+uint32_t constexpr MAX_DESCRIPTORS = 100;
+uint32_t constexpr MAX_RENDER_COMMANDS = 100;
+
 static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT msgSeverity,
     VkDebugUtilsMessageTypeFlagsEXT msgFlags,
@@ -40,8 +44,14 @@ struct VkContext
     VkCommandPool commandPool;
     VkCommandBuffer cmd;
 
-    // TODO: Will be inside an array
-    Image image;
+    uint32_t imageCount;
+    Image images[MAX_IMAGES];
+
+    uint32_t descCount;
+    Descriptor descriptors[MAX_DESCRIPTORS];
+
+    uint32_t renderCommandCount;
+    RenderCommand renderCommands[MAX_RENDER_COMMANDS];
 
     Buffer stagingBuffer;
     Buffer transformStorageBuffer;
@@ -52,7 +62,6 @@ struct VkContext
 
     // TODO: We will abstract this later
     VkSampler sampler;
-    VkDescriptorSet descSet;
     VkDescriptorSetLayout setLayout;
     VkPipelineLayout pipeLayout;
     VkPipeline pipeline;
@@ -69,6 +78,250 @@ struct VkContext
 
     int graphicsIdx;
 };
+
+Image *vk_create_image(VkContext *vkcontext, AssetTypeID assetTypeID)
+{
+    Image *image = 0;
+    if (vkcontext->imageCount < MAX_IMAGES)
+    {
+        const char *data = get_asset(assetTypeID);
+        uint32_t width = 1;
+        uint32_t height = 1;
+        const char *dataBegin = data;
+
+        if (assetTypeID != ASSET_SPRITE_WHITE)
+        {
+            const DDSFile *file = (const DDSFile *)data;
+            width = file->header.Width;
+            height = file->header.Height;
+            dataBegin = &file->dataBegin;
+        }
+
+        uint32_t textureSize = width * height * 4;
+
+        vk_copy_to_buffer(&vkcontext->stagingBuffer, dataBegin, textureSize);
+
+        //TODO: Assertions
+        image = &vkcontext->images[vkcontext->imageCount];
+        *image = vk_allocate_image(vkcontext->device,
+                                   vkcontext->gpu,
+                                   width,
+                                   height,
+                                   VK_FORMAT_R8G8B8A8_UNORM);
+
+        if (image->image != VK_NULL_HANDLE && image->memory != VK_NULL_HANDLE)
+        {
+            VkCommandBuffer cmd;
+            VkCommandBufferAllocateInfo cmdAlloc = cmd_alloc_info(vkcontext->commandPool);
+            VK_CHECK(vkAllocateCommandBuffers(vkcontext->device, &cmdAlloc, &cmd));
+
+            VkCommandBufferBeginInfo beginInfo = cmd_begin_info();
+            VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
+
+            VkImageSubresourceRange range = {};
+            range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            range.layerCount = 1;
+            range.levelCount = 1;
+
+            // Transition Layout to Transfer optimal
+            VkImageMemoryBarrier imgMemBarrier = {};
+            imgMemBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            imgMemBarrier.image = image->image;
+            imgMemBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            imgMemBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            imgMemBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            imgMemBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            imgMemBarrier.subresourceRange = range;
+
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0,
+                                 1, &imgMemBarrier);
+
+            VkBufferImageCopy copyRegion = {};
+            copyRegion.imageExtent = {width, height, 1};
+            copyRegion.imageSubresource.layerCount = 1;
+            copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vkCmdCopyBufferToImage(cmd, vkcontext->stagingBuffer.buffer, image->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+            imgMemBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            imgMemBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imgMemBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            imgMemBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0,
+                                 1, &imgMemBarrier);
+
+            VK_CHECK(vkEndCommandBuffer(cmd));
+
+            VkFence uploadFence;
+            VkFenceCreateInfo fenceInfo = fence_info();
+            VK_CHECK(vkCreateFence(vkcontext->device, &fenceInfo, 0, &uploadFence));
+
+            VkSubmitInfo submitInfo = submit_info(&cmd);
+            VK_CHECK(vkQueueSubmit(vkcontext->graphicsQueue, 1, &submitInfo, uploadFence));
+
+            // Create Image View while waiting on the GPU
+            {
+                VkImageViewCreateInfo viewInfo = {};
+                viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                viewInfo.image = image->image;
+                viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+                viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                viewInfo.subresourceRange.layerCount = 1;
+                viewInfo.subresourceRange.levelCount = 1;
+                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+
+                VK_CHECK(vkCreateImageView(vkcontext->device, &viewInfo, 0, &image->view));
+            }
+
+            VK_CHECK(vkWaitForFences(vkcontext->device, 1, &uploadFence, true, UINT64_MAX));
+        }
+        else
+        {
+            CAKEZ_ASSERT(image->image != VK_NULL_HANDLE,
+                         "Failed to allocate Memory for Image: %d", assetTypeID);
+            CAKEZ_ASSERT(image->memory != VK_NULL_HANDLE,
+                         "Failed to allocate Memory for Image: %d", assetTypeID);
+            image = 0;
+        }
+
+        // Memory is freed
+        // TODO: Allocater
+        delete data;
+    }
+    else
+    {
+        CAKEZ_ASSERT(0, "Reached Maximum amount of Images");
+    }
+
+    return image;
+}
+
+Image *vk_get_image(VkContext *vkcontext, AssetTypeID assetTypeID)
+{
+    Image *image = 0;
+    for (uint32_t i = 0; i < vkcontext->imageCount; i++)
+    {
+        Image *img = &vkcontext->images[i];
+
+        if (img->assetTypeID == assetTypeID)
+        {
+            image = img;
+            break;
+        }
+    }
+
+    if (!image)
+    {
+        image = vk_create_image(vkcontext, assetTypeID);
+    }
+
+    return image;
+}
+
+internal Descriptor *vk_create_descriptor(VkContext *vkcontext, AssetTypeID assetTypeID)
+{
+    Descriptor *desc = 0;
+
+    if (vkcontext->descCount < MAX_DESCRIPTORS)
+    {
+        desc = &vkcontext->descriptors[vkcontext->descCount];
+        *desc = {};
+        desc->assetTypeID = assetTypeID;
+
+        // Allocation
+        {
+            VkDescriptorSetAllocateInfo allocInfo = {};
+            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocInfo.pSetLayouts = &vkcontext->setLayout;
+            allocInfo.descriptorSetCount = 1;
+            allocInfo.descriptorPool = vkcontext->descPool;
+            VK_CHECK(vkAllocateDescriptorSets(vkcontext->device, &allocInfo, &desc->set));
+        }
+
+        if (desc->set != VK_NULL_HANDLE)
+        {
+            // Update Descriptor Set
+            {
+                Image *image = vk_get_image(vkcontext, ASSET_SPRITE_CAKEZ);
+
+                DescriptorInfo descInfos[] = {
+                    DescriptorInfo(vkcontext->globalUBO.buffer),
+                    DescriptorInfo(vkcontext->transformStorageBuffer.buffer),
+                    DescriptorInfo(vkcontext->sampler, image->view)};
+
+                VkWriteDescriptorSet writes[] = {
+                    write_set(desc->set, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                              &descInfos[0], 0, 1),
+                    write_set(desc->set, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                              &descInfos[1], 1, 1),
+                    write_set(desc->set, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                              &descInfos[2], 2, 1)};
+
+                vkUpdateDescriptorSets(vkcontext->device, ArraySize(writes), writes, 0, 0);
+
+                // Actually add the descriptor;
+                vkcontext->descCount++;
+            }
+        }
+        else
+        {
+            desc = 0;
+            CAKEZ_ASSERT(0, "Failed to Allocate Descriptor Set for AssetTypeID: %d", assetTypeID);
+            CAKEZ_ERROR("Failed to Allocate Descriptor Set for AssetTypeID: %d", assetTypeID);
+        }
+    }
+    else
+    {
+        CAKEZ_ASSERT(0, "Reached Maximum amount of Descriptors");
+    }
+    return desc;
+}
+
+internal Descriptor *vk_get_descriptor(VkContext *vkcontext, AssetTypeID assetTypeID)
+{
+    Descriptor *desc = 0;
+
+    for (uint32_t i = 0; i < vkcontext->descCount; i++)
+    {
+        Descriptor *d = &vkcontext->descriptors[i];
+
+        if (d->assetTypeID == assetTypeID)
+        {
+            desc = d;
+            break;
+        }
+    }
+
+    if (!desc)
+    {
+        desc = vk_create_descriptor(vkcontext, assetTypeID);
+    }
+
+    return desc;
+}
+
+internal RenderCommand *vk_add_render_command(VkContext *vkcontext, Descriptor *desc)
+{
+    CAKEZ_ASSERT(desc, "No Descriptor supplied!");
+
+    RenderCommand *rc = 0;
+
+    if (vkcontext->renderCommandCount < MAX_RENDER_COMMANDS)
+    {
+        rc = &vkcontext->renderCommands[vkcontext->renderCommandCount++];
+        *rc = {};
+        rc->desc = desc;
+    }
+    else
+    {
+        CAKEZ_ERROR(0, "Reached Maximum amount of Render Commands");
+        CAKEZ_ASSERT(0, "Reached Maximum amount of Render Commands");
+    }
+
+    return rc;
+}
 
 bool vk_init(VkContext *vkcontext, void *window)
 {
@@ -330,7 +583,6 @@ bool vk_init(VkContext *vkcontext, void *window)
 
     // Create Descriptor Set Layouts
     {
-
         VkDescriptorSetLayoutBinding layoutBindings[] = {
             layout_binding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 1, 0),
             layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 1, 1),
@@ -346,10 +598,16 @@ bool vk_init(VkContext *vkcontext, void *window)
 
     // Create Pipeline Layout
     {
+        VkPushConstantRange pushConstant = {};
+        pushConstant.size = sizeof(PushData);
+        pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
         VkPipelineLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layoutInfo.setLayoutCount = 1;
         layoutInfo.pSetLayouts = &vkcontext->setLayout;
+        layoutInfo.pPushConstantRanges = &pushConstant;
+        layoutInfo.pushConstantRangeCount = 1;
         VK_CHECK(vkCreatePipelineLayout(vkcontext->device, &layoutInfo, 0, &vkcontext->pipeLayout));
     }
 
@@ -479,84 +737,14 @@ bool vk_init(VkContext *vkcontext, void *window)
 
     // Create Image
     {
-        uint32_t fileSize;
-        DDSFile *file = (DDSFile *)platform_read_file("assets/textures/cakez.DDS", &fileSize);
-        uint32_t textureSize = file->header.Width * file->header.Height * 4;
+        Image *image = vk_create_image(vkcontext, ASSET_SPRITE_WHITE);
 
-        vk_copy_to_buffer(&vkcontext->stagingBuffer, &file->dataBegin, textureSize);
-
-        //TODO: Assertions
-        vkcontext->image = vk_allocate_image(vkcontext->device,
-                                             vkcontext->gpu,
-                                             file->header.Width,
-                                             file->header.Height,
-                                             VK_FORMAT_R8G8B8A8_UNORM);
-
-        VkCommandBuffer cmd;
-        VkCommandBufferAllocateInfo cmdAlloc = cmd_alloc_info(vkcontext->commandPool);
-        VK_CHECK(vkAllocateCommandBuffers(vkcontext->device, &cmdAlloc, &cmd));
-
-        VkCommandBufferBeginInfo beginInfo = cmd_begin_info();
-        VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
-
-        VkImageSubresourceRange range = {};
-        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        range.layerCount = 1;
-        range.levelCount = 1;
-
-        // Transition Layout to Transfer optimal
-        VkImageMemoryBarrier imgMemBarrier = {};
-        imgMemBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        imgMemBarrier.image = vkcontext->image.image;
-        imgMemBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imgMemBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        imgMemBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        imgMemBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        imgMemBarrier.subresourceRange = range;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0,
-                             1, &imgMemBarrier);
-
-        VkBufferImageCopy copyRegion = {};
-        copyRegion.imageExtent = {file->header.Width, file->header.Height, 1};
-        copyRegion.imageSubresource.layerCount = 1;
-        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        vkCmdCopyBufferToImage(cmd, vkcontext->stagingBuffer.buffer, vkcontext->image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
-
-        imgMemBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        imgMemBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imgMemBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        imgMemBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0,
-                             1, &imgMemBarrier);
-
-        VK_CHECK(vkEndCommandBuffer(cmd));
-
-        VkFence uploadFence;
-        VkFenceCreateInfo fenceInfo = fence_info();
-        VK_CHECK(vkCreateFence(vkcontext->device, &fenceInfo, 0, &uploadFence));
-
-        VkSubmitInfo submitInfo = submit_info(&cmd);
-        VK_CHECK(vkQueueSubmit(vkcontext->graphicsQueue, 1, &submitInfo, uploadFence));
-
-        VK_CHECK(vkWaitForFences(vkcontext->device, 1, &uploadFence, true, UINT64_MAX));
-    }
-
-    // Create Image View
-    {
-        VkImageViewCreateInfo viewInfo = {};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = vkcontext->image.image;
-        viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.layerCount = 1;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-
-        VK_CHECK(vkCreateImageView(vkcontext->device, &viewInfo, 0, &vkcontext->image.view));
+        if (!image->memory || !image->image || !image->view)
+        {
+            CAKEZ_ASSERT(0, "Failed to allocate White Texure");
+            CAKEZ_FATAL("Failed to allocate White Texure");
+            return false;
+        }
     }
 
     // Create Sampler
@@ -620,39 +808,13 @@ bool vk_init(VkContext *vkcontext, void *window)
 
         VkDescriptorPoolCreateInfo poolInfo = {};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.maxSets = 1;
+        poolInfo.maxSets = MAX_DESCRIPTORS;
         poolInfo.poolSizeCount = ArraySize(poolSizes);
         poolInfo.pPoolSizes = poolSizes;
         VK_CHECK(vkCreateDescriptorPool(vkcontext->device, &poolInfo, 0, &vkcontext->descPool));
     }
 
     // Create Descriptor Set
-    {
-        VkDescriptorSetAllocateInfo allocInfo = {};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.pSetLayouts = &vkcontext->setLayout;
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.descriptorPool = vkcontext->descPool;
-        VK_CHECK(vkAllocateDescriptorSets(vkcontext->device, &allocInfo, &vkcontext->descSet));
-    }
-
-    // Update Descriptor Set
-    {
-        DescriptorInfo descInfos[] = {
-            DescriptorInfo(vkcontext->globalUBO.buffer),
-            DescriptorInfo(vkcontext->transformStorageBuffer.buffer),
-            DescriptorInfo(vkcontext->sampler, vkcontext->image.view)};
-
-        VkWriteDescriptorSet writes[] = {
-            write_set(vkcontext->descSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                      &descInfos[0], 0, 1),
-            write_set(vkcontext->descSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                      &descInfos[1], 1, 1),
-            write_set(vkcontext->descSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                      &descInfos[2], 2, 1)};
-
-        vkUpdateDescriptorSets(vkcontext->device, ArraySize(writes), writes, 0, 0);
-    }
 
     return true;
 }
@@ -668,6 +830,18 @@ bool vk_render(VkContext *vkcontext, GameState *gameState)
     // Copy transforms to the buffer
     {
         vk_copy_to_buffer(&vkcontext->transformStorageBuffer, &gameState->entities, sizeof(Transform) * gameState->entityCount);
+    }
+
+    // Get Descriptor and add Render Command
+    {
+        Descriptor *desc = vk_get_descriptor(vkcontext, ASSET_SPRITE_CAKEZ);
+
+        if (desc)
+        {
+            RenderCommand *rc = vk_add_render_command(vkcontext, desc);
+            rc->instanceCount = gameState->entityCount;
+            rc->pushData.transformIdx = 0;
+        }
     }
 
     // This waits on the timeout until the image is ready, if timeout reached -> VK_TIMEOUT
@@ -692,25 +866,36 @@ bool vk_render(VkContext *vkcontext, GameState *gameState)
     rpBeginInfo.framebuffer = vkcontext->framebuffers[imgIdx];
     vkCmdBeginRenderPass(cmd, &rpBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Rendering Commands
+    VkViewport viewport = {};
+    viewport.maxDepth = 1.0f;
+    viewport.width = vkcontext->screenSize.width;
+    viewport.height = vkcontext->screenSize.height;
+
+    VkRect2D scissor = {};
+    scissor.extent = vkcontext->screenSize;
+
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindIndexBuffer(cmd, vkcontext->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeline);
+
+    // Render Loop
     {
-        VkViewport viewport = {};
-        viewport.maxDepth = 1.0f;
-        viewport.width = vkcontext->screenSize.width;
-        viewport.height = vkcontext->screenSize.height;
+        for (uint32_t i = 0; i < vkcontext->renderCommandCount; i++)
+        {
+            RenderCommand *rc = &vkcontext->renderCommands[i];
 
-        VkRect2D scissor = {};
-        scissor.extent = vkcontext->screenSize;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeLayout,
+                                    0, 1, &rc->desc->set, 0, 0);
 
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
+            vkCmdPushConstants(cmd, vkcontext->pipeLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushData), &rc->pushData);
 
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeLayout,
-                                0, 1, &vkcontext->descSet, 0, 0);
+            vkCmdDrawIndexed(cmd, 6, rc->instanceCount, 0, 0, 0);
+        }
 
-        vkCmdBindIndexBuffer(cmd, vkcontext->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeline);
-        vkCmdDrawIndexed(cmd, 6, gameState->entityCount, 0, 0, 0);
+        // Reset the Render Commands for next Frame
+        vkcontext->renderCommandCount = 0;
     }
 
     vkCmdEndRenderPass(cmd);

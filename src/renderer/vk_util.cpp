@@ -105,7 +105,7 @@ Buffer vk_allocate_buffer(
 }
 
 //TODO: Implement
-void vk_copy_to_buffer(Buffer *buffer, void *data, uint32_t size)
+void vk_copy_to_buffer(Buffer *buffer, const void *data, uint32_t size)
 {
     CAKEZ_ASSERT(buffer->size >= size, "Buffer too small: %d for data: %d", buffer->size, size);
 

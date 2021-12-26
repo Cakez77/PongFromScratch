@@ -5,8 +5,11 @@
 // This is the game Layer
 #include "game/game.cpp"
 
+#include "assets/assets.cpp"
+
 // This is the rendering Layer
 #include "renderer/vk_renderer.cpp"
+
 
 global_variable bool running = true;
 global_variable HWND window;

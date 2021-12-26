@@ -14,7 +14,12 @@ layout(set = 0, binding = 1) readonly buffer Transforms
     Transform transforms[];
 };
 
-Transform transform = transforms[gl_InstanceIndex];
+layout(push_constant) uniform block
+{
+    PushData pushData;
+};
+
+Transform transform = transforms[pushData.transformIdx + gl_InstanceIndex];
 
 vec4 vertices[4] = {
     // Top Left 

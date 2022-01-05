@@ -16,6 +16,7 @@
 uint32_t constexpr MAX_IMAGES = 100;
 uint32_t constexpr MAX_DESCRIPTORS = 100;
 uint32_t constexpr MAX_RENDER_COMMANDS = 100;
+uint32_t constexpr MAX_TRANSFORMS = MAX_ENTITIES;
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT msgSeverity,
@@ -53,8 +54,12 @@ struct VkContext
     uint32_t renderCommandCount;
     RenderCommand renderCommands[MAX_RENDER_COMMANDS];
 
+    uint32_t transformCount;
+    Transform transforms[MAX_TRANSFORMS];
+
     Buffer stagingBuffer;
     Buffer transformStorageBuffer;
+    Buffer materialStorageBuffer;
     Buffer globalUBO;
     Buffer indexBuffer;
 
@@ -249,7 +254,8 @@ internal Descriptor *vk_create_descriptor(VkContext *vkcontext, AssetTypeID asse
                 DescriptorInfo descInfos[] = {
                     DescriptorInfo(vkcontext->globalUBO.buffer),
                     DescriptorInfo(vkcontext->transformStorageBuffer.buffer),
-                    DescriptorInfo(vkcontext->sampler, image->view)};
+                    DescriptorInfo(vkcontext->sampler, image->view),
+                    DescriptorInfo(vkcontext->materialStorageBuffer.buffer)};
 
                 VkWriteDescriptorSet writes[] = {
                     write_set(desc->set, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -257,7 +263,9 @@ internal Descriptor *vk_create_descriptor(VkContext *vkcontext, AssetTypeID asse
                     write_set(desc->set, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                               &descInfos[1], 1, 1),
                     write_set(desc->set, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                              &descInfos[2], 2, 1)};
+                              &descInfos[2], 2, 1),
+                    write_set(desc->set, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                              &descInfos[3], 3, 1)};
 
                 vkUpdateDescriptorSets(vkcontext->device, ArraySize(writes), writes, 0, 0);
 
@@ -313,6 +321,7 @@ internal RenderCommand *vk_add_render_command(VkContext *vkcontext, Descriptor *
         rc = &vkcontext->renderCommands[vkcontext->renderCommandCount++];
         *rc = {};
         rc->desc = desc;
+        rc->pushData.transformIdx = vkcontext->transformCount;
     }
     else
     {
@@ -586,7 +595,8 @@ bool vk_init(VkContext *vkcontext, void *window)
         VkDescriptorSetLayoutBinding layoutBindings[] = {
             layout_binding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 1, 0),
             layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 1, 1),
-            layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1, 2)};
+            layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1, 2),
+            layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 1, 3)};
 
         VkDescriptorSetLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -762,7 +772,17 @@ bool vk_init(VkContext *vkcontext, void *window)
         vkcontext->transformStorageBuffer = vk_allocate_buffer(
             vkcontext->device,
             vkcontext->gpu,
-            sizeof(Transform) * MAX_ENTITIES,
+            sizeof(Transform) * MAX_TRANSFORMS,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    }
+
+    // Create Material Storage Buffer
+    {
+        vkcontext->materialStorageBuffer = vk_allocate_buffer(
+            vkcontext->device,
+            vkcontext->gpu,
+            sizeof(MaterialData) * MAX_MATERIALS,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
     }
@@ -827,21 +847,39 @@ bool vk_render(VkContext *vkcontext, GameState *gameState)
     VK_CHECK(vkWaitForFences(vkcontext->device, 1, &vkcontext->imgAvailableFence, VK_TRUE, UINT64_MAX));
     VK_CHECK(vkResetFences(vkcontext->device, 1, &vkcontext->imgAvailableFence));
 
-    // Copy transforms to the buffer
+    // Entity Rendering
     {
-        vk_copy_to_buffer(&vkcontext->transformStorageBuffer, &gameState->entities, sizeof(Transform) * gameState->entityCount);
+        for (uint32_t i = 0; i < gameState->entityCount; i++)
+        {
+            Entity *e = &gameState->entities[i];
+
+            Material *m = get_material(gameState, e->transform.materialIdx);
+            Descriptor *desc = vk_get_descriptor(vkcontext, m->assetTypeID);
+            if (desc)
+            {
+                RenderCommand *rc = vk_add_render_command(vkcontext, desc);
+                if (rc)
+                {
+                    rc->instanceCount = 1;
+                }
+            }
+
+            vkcontext->transforms[vkcontext->transformCount++] = e->transform;
+        }
     }
 
-    // Get Descriptor and add Render Command
+    // Copy Data to buffers
     {
-        Descriptor *desc = vk_get_descriptor(vkcontext, ASSET_SPRITE_CAKEZ);
+        vk_copy_to_buffer(&vkcontext->transformStorageBuffer, &vkcontext->transforms, sizeof(Transform) * vkcontext->transformCount);
+        vkcontext->transformCount = 0;
 
-        if (desc)
+        MaterialData materialData[MAX_MATERIALS];
+        for (uint32_t i = 0; i < gameState->materialCount; i++)
         {
-            RenderCommand *rc = vk_add_render_command(vkcontext, desc);
-            rc->instanceCount = gameState->entityCount;
-            rc->pushData.transformIdx = 0;
+            materialData[i] = gameState->materials[i].materialData;
         }
+
+        vk_copy_to_buffer(&vkcontext->materialStorageBuffer, materialData, sizeof(MaterialData) * gameState->materialCount);
     }
 
     // This waits on the timeout until the image is ready, if timeout reached -> VK_TIMEOUT

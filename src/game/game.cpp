@@ -2,7 +2,6 @@
 #include "assets/assets.h"
 #include "defines.h"
 #include "logger.h"
-#include "input.h"
 #include "my_math.h"
 
 #include "renderer/shared_render_types.h"
@@ -133,38 +132,14 @@ bool init_game(GameState *gameState)
     return true;
 }
 
-void update_game(GameState *gameState, InputState* input)
+void update_game(GameState *gameState)
 {
-    float xVel = 0.0f;
-    float yVel = 0.0f;
-
-    if(key_is_down(input, A_KEY))
-    {
-        xVel = -0.1f;
-    }
-
-    if(key_is_down(input, D_KEY))
-    {
-        xVel = 0.1f;
-    }
-
-    if(key_pressed_this_frame(input, W_KEY))
-    {
-        yVel = -10.0f;
-    }
-
-    if(key_pressed_this_frame(input, S_KEY))
-    {
-        yVel = 10.0f;
-    }
-
     // Does nothing
     for (uint32_t i = 0; i < gameState->entityCount; i++)
     {
         Entity *e = &gameState->entities[i];
 
         // This is frame rate dependent
-        e->transform.xPos += xVel;
-        e->transform.yPos += yVel;
+        e->transform.xPos += 0.01f;
     }
 }

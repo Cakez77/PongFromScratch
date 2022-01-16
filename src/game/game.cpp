@@ -128,6 +128,7 @@ bool init_game(GameState *gameState)
             counter += 1.0f;
         }
     }
+
     return true;
 }
 

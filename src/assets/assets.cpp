@@ -20,10 +20,18 @@ const char *get_asset(AssetTypeID assetTypeID)
     }
     break;
 
-    case ASSET_SPRITE_CAKEZ:
+    case ASSET_SPRITE_BALL:
     {
         uint32_t size;
-        const char *data = platform_read_file("assets/textures/cakez.DDS", &size);
+        const char *data = platform_read_file("assets/textures/ball.DDS", &size);
+        return data;
+    }
+    break;
+
+    case ASSET_SPRITE_PADDLE:
+    {
+        uint32_t size;
+        const char *data = platform_read_file("assets/textures/paddle.DDS", &size);
         return data;
     }
     break;

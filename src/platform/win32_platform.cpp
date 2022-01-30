@@ -21,6 +21,34 @@ LRESULT CALLBACK platform_window_callback(HWND window, UINT msg, WPARAM wParam, 
 {
     switch (msg)
     {
+
+    case WM_DROPFILES:
+    {
+        HDROP drop = (HDROP)wParam;
+
+        uint32_t fileCount = DragQueryFileA(drop, INVALID_IDX, 0, 0);
+
+        for (uint32_t i = 0; i < fileCount; i++)
+        {
+            uint32_t fileNameLength = DragQueryFileA(drop, i, 0, 0);
+
+            char filePath[500] = {};
+
+            DragQueryFileA(drop, i, filePath, fileNameLength + 1);
+
+            // Convert File to DDS and copy into Assets folder
+            {
+                char command[300] = {};
+
+                sprintf(command, "lib\\texconv.exe -y -m 1 -f R8G8B8A8_UNORM \"%s\" -o assets/textures",
+                        filePath);
+
+                CAKEZ_ASSERT(!system(command), "Failed to import Asset: %s", filePath);
+            }
+        }
+    }
+    break;
+
     case WM_KEYDOWN:
     case WM_KEYUP:
     {
@@ -50,8 +78,8 @@ LRESULT CALLBACK platform_window_callback(HWND window, UINT msg, WPARAM wParam, 
         {
             // if (input.keys[keyID].isDown != isDown)
             // {
-                input.keys[keyID].halfTransitionCount++;
-                input.keys[keyID].isDown = isDown;
+            input.keys[keyID].halfTransitionCount++;
+            input.keys[keyID].isDown = isDown;
             // }
         }
     }
@@ -86,13 +114,17 @@ bool platform_create_window()
         "vulkan_engine_class",
         "Pong",
         WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_OVERLAPPED,
-        100, 100, 1600, 720, 0, 0, instance, 0);
+        100, 100, 1000, 720, 0, 0, instance, 0);
 
     if (window == 0)
     {
         MessageBoxA(0, "Failed creating window", "Error", MB_ICONEXCLAMATION | MB_OK);
         return false;
     }
+
+#ifdef DEBUG
+    DragAcceptFiles(window, true);
+#endif
 
     ShowWindow(window, SW_SHOW);
 

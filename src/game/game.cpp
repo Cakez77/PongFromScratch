@@ -10,8 +10,16 @@
 uint32_t constexpr MAX_ENTITIES = 100;
 uint32_t constexpr MAX_MATERIALS = 100;
 
+enum Components
+{
+    COMPONENT_BALL = BIT(1),
+    COMPONENT_LEFT_PADDLE = BIT(2),
+    COMPONENT_RIGHT_PADDLE = BIT(3),
+};
+
 struct Entity
 {
+    uint32_t compMask;
     Transform transform;
 };
 
@@ -29,6 +37,25 @@ struct GameState
     uint32_t materialCount;
     Material materials[MAX_MATERIALS];
 };
+
+internal bool has_component(Entity *e, Components c)
+{
+    return e->compMask & c;
+}
+
+internal void add_component(Entity *e, Components c)
+{
+    e->compMask |= c;
+}
+
+internal void remove_component(Entity *e, Components c)
+{
+    /**
+     * AND with NOT c, this turns all bits to 1,
+     * except for the one BIT that c references.
+     */
+    e->compMask &= ~c;
+}
 
 internal Entity *create_entity(GameState *gameState, Transform transform)
 {
@@ -113,57 +140,42 @@ internal Material *get_material(GameState *gameState, uint32_t materialIdx)
 
 bool init_game(GameState *gameState)
 {
-    float counter = 0.0f;
-    for (uint32_t i = 0; i < 10; i++)
-    {
-        for (uint32_t j = 0; j < 10; j++)
-        {
-            float r = counter / 100.0f;
-            float g = 1.0f - r;
-            float b = r;
-            float a = 1.0f - r;
+    float paddleSizeX = 50.0f, paddleSizeY = 100.0f, ballSize = 50.0f;
 
-            Entity *e = create_entity(gameState, {i * 120.0f, j * 60.0f, 70.0f, 70.0f});
-            e->transform.materialIdx = create_material(gameState, ASSET_SPRITE_CAKEZ,
-                                                       {r, g, b, a});
-            counter += 1.0f;
-        }
-    }
+    Entity *e = create_entity(gameState, {10.0f, 10.0f, paddleSizeX, paddleSizeY});
+    add_component(e, COMPONENT_LEFT_PADDLE);
+    e->transform.materialIdx = get_material(gameState, ASSET_SPRITE_PADDLE);
+
+    e = create_entity(gameState, {1000.0f - paddleSizeX - 20.0f, 10.0f, paddleSizeX, paddleSizeY});
+    add_component(e, COMPONENT_RIGHT_PADDLE);
+    e->transform.materialIdx = get_material(gameState, ASSET_SPRITE_PADDLE);
+
+    e = create_entity(gameState, {1000.0f / 2.0f, 400.0f, ballSize, ballSize});
+    add_component(e, COMPONENT_BALL);
+    e->transform.materialIdx = get_material(gameState, ASSET_SPRITE_BALL);
+
     return true;
 }
 
-void update_game(GameState *gameState, InputState* input)
+void update_game(GameState *gameState, InputState *input)
 {
-    float xVel = 0.0f;
-    float yVel = 0.0f;
+    float vel = 0.1f;
 
-    if(key_is_down(input, A_KEY))
-    {
-        xVel = -0.1f;
-    }
-
-    if(key_is_down(input, D_KEY))
-    {
-        xVel = 0.1f;
-    }
-
-    if(key_pressed_this_frame(input, W_KEY))
-    {
-        yVel = -10.0f;
-    }
-
-    if(key_pressed_this_frame(input, S_KEY))
-    {
-        yVel = 10.0f;
-    }
-
-    // Does nothing
     for (uint32_t i = 0; i < gameState->entityCount; i++)
     {
         Entity *e = &gameState->entities[i];
 
-        // This is frame rate dependent
-        e->transform.xPos += xVel;
-        e->transform.yPos += yVel;
+        if (has_component(e, COMPONENT_LEFT_PADDLE))
+        {
+            if (key_is_down(input, W_KEY))
+            {
+                e->transform.yPos -= vel;
+            }
+
+            if (key_is_down(input, S_KEY))
+            {
+                e->transform.yPos += vel;
+            }
+        }
     }
 }

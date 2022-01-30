@@ -249,7 +249,7 @@ internal Descriptor *vk_create_descriptor(VkContext *vkcontext, AssetTypeID asse
         {
             // Update Descriptor Set
             {
-                Image *image = vk_get_image(vkcontext, ASSET_SPRITE_CAKEZ);
+                Image *image = vk_get_image(vkcontext, assetTypeID);
 
                 DescriptorInfo descInfos[] = {
                     DescriptorInfo(vkcontext->globalUBO.buffer),
@@ -893,7 +893,7 @@ bool vk_render(VkContext *vkcontext, GameState *gameState)
 
     // Clear Color to Yellow
     VkClearValue clearValue = {};
-    clearValue.color = {1, 1, 0, 1};
+    clearValue.color = {0, 0, 0, 1};
 
     VkRenderPassBeginInfo rpBeginInfo = {};
     rpBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;

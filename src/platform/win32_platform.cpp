@@ -234,6 +234,8 @@ char *platform_read_file(char *path, uint32_t *length)
             CAKEZ_ASSERT(0, "Failed to get size of file: %s", path);
             CAKEZ_ERROR("Failed to get size of file: %s", path);
         }
+
+        CloseHandle(file);
     }
     else
     {

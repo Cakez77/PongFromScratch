@@ -20,6 +20,7 @@ enum Components
 struct Entity
 {
     uint32_t compMask;
+    Vec2 vel;
     Transform transform;
 };
 
@@ -153,13 +154,14 @@ bool init_game(GameState *gameState)
     e = create_entity(gameState, {1000.0f / 2.0f, 400.0f, ballSize, ballSize});
     add_component(e, COMPONENT_BALL);
     e->transform.materialIdx = get_material(gameState, ASSET_SPRITE_BALL);
+    e->vel = {500.0f, 250.0f};
 
     return true;
 }
 
-void update_game(GameState *gameState, InputState *input)
+void update_game(GameState *gameState, InputState *input, float dt)
 {
-    float vel = 0.1f;
+    float speed = 500.0f;
 
     for (uint32_t i = 0; i < gameState->entityCount; i++)
     {
@@ -167,15 +169,55 @@ void update_game(GameState *gameState, InputState *input)
 
         if (has_component(e, COMPONENT_LEFT_PADDLE))
         {
+            e->vel = {};
             if (key_is_down(input, W_KEY))
             {
-                e->transform.yPos -= vel;
+                e->vel.y = -speed;
             }
 
             if (key_is_down(input, S_KEY))
             {
-                e->transform.yPos += vel;
+                e->vel.y = speed;
+            }
+
+            // Confine the Paddle to the screen
+            {
+                e->transform.yPos = clamp(e->transform.yPos, 0.0f, input->screenSize.y - e->transform.sizeY);
             }
         }
+
+        if (has_component(e, COMPONENT_BALL))
+        {
+            if (e->transform.xPos + e->transform.sizeX > input->screenSize.x)
+            {
+                e->vel.x = -e->vel.x;
+
+                e->transform.xPos -= 2 * (e->transform.xPos + e->transform.sizeX - input->screenSize.x);
+            }
+
+            if (e->transform.xPos < 0.0f)
+            {
+                e->vel.x = -e->vel.x;
+
+                e->transform.xPos = -e->transform.xPos;
+            }
+
+            if (e->transform.yPos + e->transform.sizeX > input->screenSize.y)
+            {
+                e->vel.y = -e->vel.y;
+
+                e->transform.yPos -= 2 * (e->transform.yPos + e->transform.sizeY - input->screenSize.y);
+            }
+
+            if (e->transform.yPos < 0.0f)
+            {
+                e->vel.y = -e->vel.y;
+
+                e->transform.yPos = -e->transform.yPos;
+            }
+        }
+
+        e->transform.xPos += e->vel.x * dt;
+        e->transform.yPos += e->vel.y * dt;
     }
 }

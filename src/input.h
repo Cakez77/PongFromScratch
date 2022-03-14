@@ -1,6 +1,7 @@
 #pragma once
 
 #include "defines.h"
+#include "my_math.h"
 
 enum KeyID
 {
@@ -20,6 +21,7 @@ struct Key
 
 struct InputState
 {
+    Vec2 screenSize;
     Key keys[KEY_COUNT];
 };
 

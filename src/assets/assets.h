@@ -1,5 +1,7 @@
 #pragma once
 
+#include "my_math.h"
+
 enum AssetTypeID
 {
     ASSET_SPRITE_WHITE,
@@ -10,3 +12,4 @@ enum AssetTypeID
 };
 
 const char *get_asset(AssetTypeID assetTypeID);
+Vec2 get_texture_size(AssetTypeID assetTypeID);

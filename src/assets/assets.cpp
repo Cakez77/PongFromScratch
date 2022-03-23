@@ -42,3 +42,33 @@ const char *get_asset(AssetTypeID assetTypeID)
 
     return 0;
 }
+
+Vec2 get_texture_size(AssetTypeID assetTypeID)
+{
+    Vec2 size = {};
+    switch (assetTypeID)
+    {
+    case ASSET_SPRITE_WHITE:
+    {
+        size =  {1.0f, 1.0f};
+    }
+    break;
+
+    case ASSET_SPRITE_BALL:
+    {
+        size = {50.0f, 50.0f};
+    }
+    break;
+
+    case ASSET_SPRITE_PADDLE:
+    {
+        size = {50.0f, 100.0f};
+    }
+    break;
+
+    default:
+        CAKEZ_ASSERT(0, "Unrecognized Asset Type ID: %d", assetTypeID);
+    }
+
+    return size;
+}

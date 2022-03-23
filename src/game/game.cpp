@@ -20,8 +20,11 @@ enum Components
 struct Entity
 {
     uint32_t compMask;
+    uint32_t materialIdx;
+    Vec2 origin;
     Vec2 vel;
-    Transform transform;
+    Vec2 spriteOffset;
+    Rect boundingBox;
 };
 
 struct Material
@@ -58,14 +61,20 @@ internal void remove_component(Entity *e, Components c)
     e->compMask &= ~c;
 }
 
-internal Entity *create_entity(GameState *gameState, Transform transform)
+internal Entity *create_entity(
+    GameState *gameState,
+    Vec2 origin,
+    Vec2 spriteOffset,
+    Rect boundingBox)
 {
     Entity *e = 0;
 
     if (gameState->entityCount < MAX_ENTITIES)
     {
         e = &gameState->entities[gameState->entityCount++];
-        e->transform = transform;
+        e->origin = origin;
+        e->spriteOffset = spriteOffset;
+        e->boundingBox = boundingBox;
     }
     else
     {
@@ -139,21 +148,44 @@ internal Material *get_material(GameState *gameState, uint32_t materialIdx)
     return m;
 }
 
-bool init_game(GameState *gameState)
+//########################################################################################
+//                      Functions related to the Game
+//########################################################################################
+internal Rect get_bounding_box(Entity *e)
 {
-    float paddleSizeX = 50.0f, paddleSizeY = 100.0f, ballSize = 50.0f;
+    CAKEZ_ASSERT(e, "No Entity supplied");
+    return Rect{e->origin + e->boundingBox.offet, e->boundingBox.size};
+}
 
-    Entity *e = create_entity(gameState, {10.0f, 10.0f, paddleSizeX, paddleSizeY});
+bool init_game(GameState *gameState, InputState *input)
+{
+    Vec2 paddleSize = get_texture_size(ASSET_SPRITE_PADDLE);
+    Vec2 spriteOffsetPaddle = paddleSize / 2.0f * -1.0f;
+    Vec2 ballSize = get_texture_size(ASSET_SPRITE_BALL);
+    Vec2 spriteOffsetBall = ballSize / 2.0f * -1.0f;
+
+    // Left Paddle
+    Entity *e = create_entity(gameState,
+                              {10.0f + paddleSize.x / 2.0f, input->screenSize.y / 2.0f},
+                              spriteOffsetPaddle,
+                              {spriteOffsetPaddle, paddleSize});
     add_component(e, COMPONENT_LEFT_PADDLE);
-    e->transform.materialIdx = get_material(gameState, ASSET_SPRITE_PADDLE);
+    e->materialIdx = get_material(gameState, ASSET_SPRITE_PADDLE);
 
-    e = create_entity(gameState, {1000.0f - paddleSizeX - 20.0f, 10.0f, paddleSizeX, paddleSizeY});
+    // Right Paddle
+    e = create_entity(gameState,
+                      {input->screenSize.x - 10.0f - paddleSize.x / 2.0f, input->screenSize.y / 2.0f},
+                      spriteOffsetPaddle,
+                      {spriteOffsetPaddle, paddleSize});
     add_component(e, COMPONENT_RIGHT_PADDLE);
-    e->transform.materialIdx = get_material(gameState, ASSET_SPRITE_PADDLE);
+    e->materialIdx = get_material(gameState, ASSET_SPRITE_PADDLE);
 
-    e = create_entity(gameState, {1000.0f / 2.0f, 400.0f, ballSize, ballSize});
+    // Ball
+    e = create_entity(gameState, input->screenSize / 2.0f,
+                      spriteOffsetBall,
+                      {spriteOffsetBall, ballSize});
     add_component(e, COMPONENT_BALL);
-    e->transform.materialIdx = get_material(gameState, ASSET_SPRITE_BALL);
+    e->materialIdx = get_material(gameState, ASSET_SPRITE_BALL);
     e->vel = {500.0f, 250.0f};
 
     return true;
@@ -182,42 +214,161 @@ void update_game(GameState *gameState, InputState *input, float dt)
 
             // Confine the Paddle to the screen
             {
-                e->transform.yPos = clamp(e->transform.yPos, 0.0f, input->screenSize.y - e->transform.sizeY);
+                e->origin.y = clamp(e->origin.y,
+                                    e->boundingBox.size.y / 2.0f,
+                                    input->screenSize.y - e->boundingBox.size.y / 2.0f);
+            }
+
+            e->origin = e->origin + e->vel * dt;
+        }
+
+        if (has_component(e, COMPONENT_RIGHT_PADDLE))
+        {
+            e->vel = {};
+
+            Entity *ball = &gameState->entities[2];
+
+            // We are below the Ball, need to move UP
+            if (e->origin.y > ball->origin.y)
+            {
+                e->vel.y = -speed;
+
+                float yHeading = e->origin.y + e->vel.y * dt;
+                float distanceYToBall = ball->origin.y - e->origin.y;
+
+                if (yHeading < distanceYToBall)
+                {
+                    e->origin.y = ball->origin.y;
+                }
+                else
+                {
+                    e->origin.y = yHeading;
+                }
+            }
+
+            // We are above the Ball, need to move DOWN
+            if (e->origin.y < ball->origin.y)
+            {
+                e->vel.y = speed;
+
+                float yHeading = e->origin.y + e->vel.y * dt;
+                float distanceYToBall = ball->origin.y - e->origin.y;
+
+                if (yHeading > distanceYToBall)
+                {
+                    e->origin.y = ball->origin.y;
+                }
+                else
+                {
+                    e->origin.y = yHeading;
+                }
             }
         }
 
         if (has_component(e, COMPONENT_BALL))
         {
-            if (e->transform.xPos + e->transform.sizeX > input->screenSize.x)
+            if (e->origin.x + e->boundingBox.offet.x + e->boundingBox.size.x > input->screenSize.x)
             {
                 e->vel.x = -e->vel.x;
 
-                e->transform.xPos -= 2 * (e->transform.xPos + e->transform.sizeX - input->screenSize.x);
+                e->origin.x -= 2 * (e->origin.x + e->boundingBox.offet.x + e->boundingBox.size.x - input->screenSize.x);
             }
 
-            if (e->transform.xPos < 0.0f)
+            if (e->origin.x + e->boundingBox.offet.x < 0.0f)
             {
                 e->vel.x = -e->vel.x;
 
-                e->transform.xPos = -e->transform.xPos;
+                e->origin.x -= 2 * (e->origin.x + e->boundingBox.offet.x);
             }
 
-            if (e->transform.yPos + e->transform.sizeX > input->screenSize.y)
+            if (e->origin.y + e->boundingBox.offet.y + e->boundingBox.size.y > input->screenSize.y)
             {
                 e->vel.y = -e->vel.y;
 
-                e->transform.yPos -= 2 * (e->transform.yPos + e->transform.sizeY - input->screenSize.y);
+                e->origin.y -= 2 * (e->origin.y + e->boundingBox.offet.y + e->boundingBox.size.y - input->screenSize.y);
             }
 
-            if (e->transform.yPos < 0.0f)
+            if (e->origin.y + e->boundingBox.offet.y < 0.0f)
             {
                 e->vel.y = -e->vel.y;
 
-                e->transform.yPos = -e->transform.yPos;
+                e->origin.y -= 2 * (e->origin.y + e->boundingBox.offet.y);
+            }
+
+            // Check for collision with the Paddles
+            {
+                Vec2 nextBallPos = e->origin + e->vel * dt;
+
+                Entity *leftPaddle = &gameState->entities[0];
+                Entity *rightPaddle = &gameState->entities[1];
+
+                Rect leftPaddleBoundingBox = get_bounding_box(leftPaddle);
+                Rect rightPaddleBoundingBox = get_bounding_box(rightPaddle);
+
+                float leftBarrier = leftPaddleBoundingBox.pos.x + leftPaddleBoundingBox.size.x + e->boundingBox.size.x / 2.0f;
+                float rightBarrier = rightPaddleBoundingBox.pos.x - e->boundingBox.size.x / 2.0f;
+
+                if (e->origin.x > leftBarrier && e->origin.x < rightBarrier)
+                {
+                    // Left Barrier check
+                    {
+                        Vec2 collisionPoint = {};
+
+                        if (line_intersection(e->origin, nextBallPos,
+                                              Vec2{leftBarrier, leftPaddleBoundingBox.pos.y},
+                                              Vec2{leftBarrier, leftPaddleBoundingBox.pos.y + leftPaddleBoundingBox.size.y},
+                                              &collisionPoint))
+                        {
+                            e->vel.x = -e->vel.x;
+
+                            // Remove the Penetration
+                            nextBallPos.x += 2 * (leftBarrier - nextBallPos.x);
+                        }
+                    }
+
+                    // Right Barrier check
+                    {
+                        Vec2 collisionPoint = {};
+
+                        if (line_intersection(e->origin, nextBallPos,
+                                              Vec2{rightBarrier, rightPaddleBoundingBox.pos.y},
+                                              Vec2{rightBarrier, rightPaddleBoundingBox.pos.y + rightPaddleBoundingBox.size.y},
+                                              &collisionPoint))
+                        {
+                            e->vel.x = -e->vel.x;
+
+                            // Remove the Penetration
+                            nextBallPos.x -= 2 * (nextBallPos.x - rightBarrier);
+                        }
+                    }
+                }
+
+                // Add Velocity
+                e->origin = nextBallPos;
+            }
+
+            // Increase the Speed of the Ball
+            {
+                float speedUp = 25.0f;
+
+                if (e->vel.x < 0.0f)
+                {
+                    e->vel.x -= dt * speedUp;
+                }
+                else
+                {
+                    e->vel.x += dt * speedUp;
+                }
+
+                if (e->vel.y < 0.0f)
+                {
+                    e->vel.y -= dt * speedUp;
+                }
+                else
+                {
+                    e->vel.y += dt * speedUp;
+                }
             }
         }
-
-        e->transform.xPos += e->vel.x * dt;
-        e->transform.yPos += e->vel.y * dt;
     }
 }

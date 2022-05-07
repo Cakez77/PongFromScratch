@@ -24,16 +24,16 @@ Transform transform = transforms[pushData.transformIdx + gl_InstanceIndex];
 
 vec4 vertices[4] = {
     // Top Left 
-    vec4(transform.xPos, transform.yPos, 0.0, 0.0),
+    vec4(transform.xPos, transform.yPos, transform.leftU, transform.topV),
 
     // Bottom Left
-    vec4(transform.xPos, transform.yPos + transform.sizeY, 0.0, 1.0),
+    vec4(transform.xPos, transform.yPos + transform.sizeY, transform.leftU, transform.bottomV),
 
     // Bottom Right
-    vec4(transform.xPos + transform.sizeX, transform.yPos + transform.sizeY, 1.0, 1.0),
+    vec4(transform.xPos + transform.sizeX, transform.yPos + transform.sizeY, transform.rightU, transform.bottomV),
 
     // Top Right
-    vec4(transform.xPos + transform.sizeX, transform.yPos, 1.0, 0.0),
+    vec4(transform.xPos + transform.sizeX, transform.yPos, transform.rightU, transform.topV),
 };
 
 void main()

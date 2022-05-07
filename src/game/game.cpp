@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "input.h"
 #include "my_math.h"
+#include "ui/ui.h"
 
 #include "renderer/shared_render_types.h"
 
@@ -159,9 +160,9 @@ internal Rect get_bounding_box(Entity *e)
 
 bool init_game(GameState *gameState, InputState *input)
 {
-    Vec2 paddleSize = get_texture_size(ASSET_SPRITE_PADDLE);
+    Vec2 paddleSize = get_texture(ASSET_SPRITE_PADDLE).subSize;
     Vec2 spriteOffsetPaddle = paddleSize / 2.0f * -1.0f;
-    Vec2 ballSize = get_texture_size(ASSET_SPRITE_BALL);
+    Vec2 ballSize = get_texture(ASSET_SPRITE_BALL).subSize;
     Vec2 spriteOffsetBall = ballSize / 2.0f * -1.0f;
 
     // Left Paddle
@@ -191,9 +192,12 @@ bool init_game(GameState *gameState, InputState *input)
     return true;
 }
 
-void update_game(GameState *gameState, InputState *input, float dt)
+void update_game(GameState *gameState, UIState* ui, InputState *input, float dt)
 {
     float speed = 500.0f;
+
+    do_text(ui, {100.0f, 100.0f}, "Pong from Scratch!");
+
 
     for (uint32_t i = 0; i < gameState->entityCount; i++)
     {

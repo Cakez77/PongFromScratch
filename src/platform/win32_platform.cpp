@@ -5,6 +5,10 @@
 // This is the game Layer
 #include "game/game.cpp"
 
+// This is the UI Layer
+#include "ui/ui.cpp"
+
+// This is the Assets Layer
 #include "assets/assets.cpp"
 
 // This is the rendering Layer
@@ -160,6 +164,7 @@ int main()
 
     VkContext vkcontext = {};
     GameState gameState = {};
+    UIState ui = {};
 
     if (!platform_create_window(input.screenSize))
     {
@@ -215,8 +220,9 @@ int main()
             dt /= 1000.0f;
         }
 
-        update_game(&gameState, &input, dt);
-        if (!vk_render(&vkcontext, &gameState))
+        update_ui(&ui);
+        update_game(&gameState, &ui, &input, dt);
+        if (!vk_render(&vkcontext, &gameState, &ui))
         {
             CAKEZ_FATAL("Failed to render Vulkan");
             return -1;

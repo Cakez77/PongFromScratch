@@ -332,6 +332,68 @@ internal RenderCommand *vk_add_render_command(VkContext *vkcontext, Descriptor *
     return rc;
 }
 
+internal void vk_add_transform(
+    VkContext *vkcontext,
+    uint32_t materialIdx,
+    AssetTypeID assetTypeID,
+    Vec2 pos,
+    uint32_t animationIdx = 0)
+{
+    Texture texture = get_texture(assetTypeID);
+
+    uint32_t cols = texture.size.x / texture.subSize.x;
+    uint32_t rows = texture.size.y / texture.subSize.y;
+
+    float uvWidth = 1.0f / (float)cols;
+    float uvHeight = 1.0f / (float)rows;
+
+    Transform t = {};
+    t.materialIdx = materialIdx;
+    t.xPos = pos.x;
+    t.yPos = pos.y;
+    t.sizeX = texture.subSize.x;
+    t.sizeY = texture.subSize.y;
+    t.topV = float(animationIdx / cols) * uvHeight;
+    t.bottomV = t.topV + uvHeight;
+    t.leftU = float(animationIdx % cols) * uvWidth;
+    t.rightU = t.leftU + uvWidth;
+
+    vkcontext->transforms[vkcontext->transformCount++] = t;
+}
+
+internal void vk_render_text(VkContext *vkcontext, RenderCommand *rc,
+                             uint32_t materialIdx, char *text, Vec2 origin)
+{
+    float originX = origin.x;
+
+    // This assumes that l.text is NULL terminated!
+    while (char c = *(text++))
+    {
+        if (c < 0)
+        {
+            CAKEZ_ASSERT(0, "Wrong Char!");
+            continue;
+        }
+
+        if (c == ' ')
+        {
+            origin.x += 15.0f;
+            continue;
+        }
+
+        if (c == '\n')
+        {
+            origin.y += 15.0f;
+            origin.x = originX;
+            continue;
+        }
+
+        vk_add_transform(vkcontext, materialIdx, ASSET_SPRITE_FONT_ATLAS, origin, c);
+        rc->instanceCount++;
+        origin.x += 15.0f;
+    }
+}
+
 bool vk_init(VkContext *vkcontext, void *window)
 {
     vk_compile_shader("assets/shaders/shader.vert", "assets/shaders/compiled/shader.vert.spv");
@@ -839,7 +901,7 @@ bool vk_init(VkContext *vkcontext, void *window)
     return true;
 }
 
-bool vk_render(VkContext *vkcontext, GameState *gameState)
+bool vk_render(VkContext *vkcontext, GameState *gameState, UIState *ui)
 {
     uint32_t imgIdx;
 
@@ -864,16 +926,30 @@ bool vk_render(VkContext *vkcontext, GameState *gameState)
                 }
             }
 
-            Vec2 textureSize = get_texture_size(m->assetTypeID);
-            
-            Transform t = {};
-            t.materialIdx = e->materialIdx;
-            t.xPos = e->origin.x + e->spriteOffset.x;
-            t.yPos = e->origin.y + e->spriteOffset.y;
-            t.sizeX = textureSize.x;
-            t.sizeY = textureSize.y;
+            vk_add_transform(vkcontext, e->materialIdx, m->assetTypeID, e->origin + e->spriteOffset);
+        }
+    }
 
-            vkcontext->transforms[vkcontext->transformCount++] = t;
+    // UI Rendering
+    {
+        if (ui->labelCount)
+        {
+            Descriptor *desc = vk_get_descriptor(vkcontext, ASSET_SPRITE_FONT_ATLAS);
+            if (desc)
+            {
+                RenderCommand *rc = vk_add_render_command(vkcontext, desc);
+
+                if (rc)
+                {
+                    for (uint32_t labelIdx = 0; labelIdx < ui->labelCount; labelIdx++)
+                    {
+                        Label l = ui->labels[labelIdx];
+                        uint32_t materialIdx = get_material(gameState, ASSET_SPRITE_FONT_ATLAS);
+
+                        vk_render_text(vkcontext, rc, materialIdx, l.text, l.pos);
+                    }
+                }
+            }
         }
     }
 

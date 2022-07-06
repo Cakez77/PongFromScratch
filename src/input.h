@@ -5,10 +5,14 @@
 
 enum KeyID
 {
-    A_KEY,
-    D_KEY,
-    S_KEY,
-    W_KEY,
+    KEY_LEFT_MOUSE,
+    KEY_MIDDLE_MOUSE,
+    KEY_RIGHT_MOUSE,
+
+    KEY_A,
+    KEY_D,
+    KEY_S,
+    KEY_W,
 
     KEY_COUNT
 };
@@ -21,6 +25,10 @@ struct Key
 
 struct InputState
 {
+    Vec2 mousePos;
+    Vec2 mouseClickPos;
+    Vec2 prevMousePos;
+
     Vec2 screenSize;
     Key keys[KEY_COUNT];
 };

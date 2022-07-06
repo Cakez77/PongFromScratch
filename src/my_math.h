@@ -62,6 +62,14 @@ struct Rect
     Vec2 size;
 };
 
+bool point_in_rect(Vec2 point, Rect rect)
+{
+    return point.x > rect.pos.x &&
+           point.x < rect.pos.x + rect.size.x &&
+           point.y > rect.pos.y &&
+           point.y < rect.pos.y + rect.size.y;
+}
+
 struct Vec4
 {
     union

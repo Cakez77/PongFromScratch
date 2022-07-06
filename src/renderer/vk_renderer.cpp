@@ -8,6 +8,8 @@
 #include "logger.h"
 #include "platform.h"
 
+#include "shared_render_types.h"
+
 #include "vk_types.h"
 #include "vk_init.cpp"
 #include "vk_util.cpp"
@@ -16,6 +18,7 @@
 uint32_t constexpr MAX_IMAGES = 100;
 uint32_t constexpr MAX_DESCRIPTORS = 100;
 uint32_t constexpr MAX_RENDER_COMMANDS = 100;
+uint32_t constexpr MAX_MATERIALS = 100;
 uint32_t constexpr MAX_TRANSFORMS = MAX_ENTITIES;
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_callback(
@@ -82,7 +85,39 @@ struct VkContext
     VkFramebuffer framebuffers[5];
 
     int graphicsIdx;
+
+    uint32_t materialCount;
+    MaterialData materials[MAX_MATERIALS];
 };
+
+internal uint32_t vk_get_or_create_material_idx(VkContext *vkcontext, Vec4 color = {1.0f, 1.0f, 1.0f, 1.0f})
+{
+    uint32_t materialIdx = INVALID_IDX;
+
+    for (uint32_t i = 0; i < vkcontext->materialCount; i++)
+    {
+        if (vkcontext->materials[i].color == color)
+        {
+            materialIdx = i;
+            break;
+        }
+    }
+
+    if (materialIdx == INVALID_IDX)
+    {
+        if (vkcontext->materialCount < MAX_MATERIALS)
+        {
+            materialIdx = vkcontext->materialCount;
+            vkcontext->materials[vkcontext->materialCount++].color = color;
+        }
+        else
+        {
+            CAKEZ_ASSERT(0, "Reached maximum amount of Materials!");
+        }
+    }
+
+    return materialIdx;
+}
 
 Image *vk_create_image(VkContext *vkcontext, AssetTypeID assetTypeID)
 {
@@ -106,7 +141,7 @@ Image *vk_create_image(VkContext *vkcontext, AssetTypeID assetTypeID)
 
         vk_copy_to_buffer(&vkcontext->stagingBuffer, dataBegin, textureSize);
 
-        //TODO: Assertions
+        // TODO: Assertions
         image = &vkcontext->images[vkcontext->imageCount];
         *image = vk_allocate_image(vkcontext->device,
                                    vkcontext->gpu,
@@ -334,35 +369,52 @@ internal RenderCommand *vk_add_render_command(VkContext *vkcontext, Descriptor *
 
 internal void vk_add_transform(
     VkContext *vkcontext,
-    uint32_t materialIdx,
     AssetTypeID assetTypeID,
+    Vec4 color,
     Vec2 pos,
-    uint32_t animationIdx = 0)
+    uint32_t animationIdx = 0,
+    Vec2 size = {})
 {
-    Texture texture = get_texture(assetTypeID);
+    if (vkcontext->transformCount < MAX_TRANSFORMS)
+    {
+        Texture texture = get_texture(assetTypeID);
+        uint32_t materialIdx = vk_get_or_create_material_idx(vkcontext, color);
 
-    uint32_t cols = texture.size.x / texture.subSize.x;
-    uint32_t rows = texture.size.y / texture.subSize.y;
+        uint32_t subSizeX = texture.subSize.x;
+        uint32_t subSizeY = texture.subSize.y;
+        uint32_t cols = texture.size.x / (float)subSizeX;
+        uint32_t rows = texture.size.y / (float)subSizeY;
+        float uvWidth = 1.0f / (float)cols;
+        float uvHeight = 1.0f / (float)rows;
 
-    float uvWidth = 1.0f / (float)cols;
-    float uvHeight = 1.0f / (float)rows;
+        if (size.x && size.y)
+        {
+            subSizeX = size.x;
+            subSizeY = size.y;
+        }
 
-    Transform t = {};
-    t.materialIdx = materialIdx;
-    t.xPos = pos.x;
-    t.yPos = pos.y;
-    t.sizeX = texture.subSize.x;
-    t.sizeY = texture.subSize.y;
-    t.topV = float(animationIdx / cols) * uvHeight;
-    t.bottomV = t.topV + uvHeight;
-    t.leftU = float(animationIdx % cols) * uvWidth;
-    t.rightU = t.leftU + uvWidth;
+        Transform t = {};
+        t.materialIdx = materialIdx;
+        t.xPos = pos.x;
+        t.yPos = pos.y;
+        t.sizeX = subSizeX;
+        t.sizeY = subSizeY;
+        t.topV = float(animationIdx / cols) * uvHeight;
+        t.bottomV = t.topV + uvHeight;
+        t.leftU = float(animationIdx % cols) * uvWidth;
+        t.rightU = t.leftU + uvWidth;
 
-    vkcontext->transforms[vkcontext->transformCount++] = t;
+        vkcontext->transforms[vkcontext->transformCount++] = t;
+    }
+    else
+    {
+        CAKEZ_ASSERT(0, "Reached maximum amount of transforms!");
+    }
 }
 
 internal void vk_render_text(VkContext *vkcontext, RenderCommand *rc,
-                             uint32_t materialIdx, char *text, Vec2 origin)
+                             char *text, Vec2 origin,
+                             Vec4 color = {1.0f, 1.0f, 1.0f, 1.0f})
 {
     float originX = origin.x;
 
@@ -388,7 +440,7 @@ internal void vk_render_text(VkContext *vkcontext, RenderCommand *rc,
             continue;
         }
 
-        vk_add_transform(vkcontext, materialIdx, ASSET_SPRITE_FONT_ATLAS, origin, c);
+        vk_add_transform(vkcontext, ASSET_SPRITE_FONT_ATLAS, color, origin, c);
         rc->instanceCount++;
         origin.x += 15.0f;
     }
@@ -460,7 +512,7 @@ bool vk_init(VkContext *vkcontext, void *window)
         vkcontext->graphicsIdx = -1;
 
         uint32_t gpuCount = 0;
-        //TODO: Suballocation from Main Allocation
+        // TODO: Suballocation from Main Allocation
         VkPhysicalDevice gpus[10];
         VK_CHECK(vkEnumeratePhysicalDevices(vkcontext->instance, &gpuCount, 0));
         VK_CHECK(vkEnumeratePhysicalDevices(vkcontext->instance, &gpuCount, gpus));
@@ -470,7 +522,7 @@ bool vk_init(VkContext *vkcontext, void *window)
             VkPhysicalDevice gpu = gpus[i];
 
             uint32_t queueFamilyCount = 0;
-            //TODO: Suballocation from Main Allocation
+            // TODO: Suballocation from Main Allocation
             VkQueueFamilyProperties queueProps[10];
             vkGetPhysicalDeviceQueueFamilyProperties(gpu, &queueFamilyCount, 0);
             vkGetPhysicalDeviceQueueFamilyProperties(gpu, &queueFamilyCount, queueProps);
@@ -527,7 +579,7 @@ bool vk_init(VkContext *vkcontext, void *window)
     // Swapchain
     {
         uint32_t formatCount = 0;
-        //TODO: Suballocation from Main Memory
+        // TODO: Suballocation from Main Memory
         VkSurfaceFormatKHR surfaceFormats[10];
         VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(vkcontext->gpu, vkcontext->surface, &formatCount, 0));
         VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(vkcontext->gpu, vkcontext->surface, &formatCount, surfaceFormats));
@@ -915,8 +967,7 @@ bool vk_render(VkContext *vkcontext, GameState *gameState, UIState *ui)
         {
             Entity *e = &gameState->entities[i];
 
-            Material *m = get_material(gameState, e->materialIdx);
-            Descriptor *desc = vk_get_descriptor(vkcontext, m->assetTypeID);
+            Descriptor *desc = vk_get_descriptor(vkcontext, e->assetTypeID);
             if (desc)
             {
                 RenderCommand *rc = vk_add_render_command(vkcontext, desc);
@@ -926,12 +977,32 @@ bool vk_render(VkContext *vkcontext, GameState *gameState, UIState *ui)
                 }
             }
 
-            vk_add_transform(vkcontext, e->materialIdx, m->assetTypeID, e->origin + e->spriteOffset);
+            vk_add_transform(vkcontext, e->assetTypeID, e->color, e->origin + e->spriteOffset);
         }
     }
 
     // UI Rendering
     {
+        for (uint32_t uiEleIdx = 0;
+             uiEleIdx < ui->uiElementCount;
+             uiEleIdx++)
+        {
+            UIElement e = ui->uiElements[uiEleIdx];
+
+            Descriptor *desc = vk_get_descriptor(vkcontext, e.assetTypeID);
+            if (desc)
+            {
+                RenderCommand *rc = vk_add_render_command(vkcontext, desc);
+                if (rc)
+                {
+                    rc->instanceCount = 1;
+                }
+            }
+
+            vk_add_transform(vkcontext, e.assetTypeID,
+                             {1.0f, 1.0f, 1.0f, 1.0f}, e.rect.pos, e.animationIdx, e.rect.size);
+        }
+
         if (ui->labelCount)
         {
             Descriptor *desc = vk_get_descriptor(vkcontext, ASSET_SPRITE_FONT_ATLAS);
@@ -944,9 +1015,8 @@ bool vk_render(VkContext *vkcontext, GameState *gameState, UIState *ui)
                     for (uint32_t labelIdx = 0; labelIdx < ui->labelCount; labelIdx++)
                     {
                         Label l = ui->labels[labelIdx];
-                        uint32_t materialIdx = get_material(gameState, ASSET_SPRITE_FONT_ATLAS);
 
-                        vk_render_text(vkcontext, rc, materialIdx, l.text, l.pos);
+                        vk_render_text(vkcontext, rc, l.text, l.pos);
                     }
                 }
             }
@@ -955,16 +1025,11 @@ bool vk_render(VkContext *vkcontext, GameState *gameState, UIState *ui)
 
     // Copy Data to buffers
     {
-        vk_copy_to_buffer(&vkcontext->transformStorageBuffer, &vkcontext->transforms, sizeof(Transform) * vkcontext->transformCount);
+        vk_copy_to_buffer(&vkcontext->transformStorageBuffer, vkcontext->transforms, sizeof(Transform) * vkcontext->transformCount);
         vkcontext->transformCount = 0;
 
-        MaterialData materialData[MAX_MATERIALS];
-        for (uint32_t i = 0; i < gameState->materialCount; i++)
-        {
-            materialData[i] = gameState->materials[i].materialData;
-        }
-
-        vk_copy_to_buffer(&vkcontext->materialStorageBuffer, materialData, sizeof(MaterialData) * gameState->materialCount);
+        vk_copy_to_buffer(&vkcontext->materialStorageBuffer, vkcontext->materials, sizeof(MaterialData) * vkcontext->materialCount);
+        vkcontext->materialCount = 0;
     }
 
     // This waits on the timeout until the image is ready, if timeout reached -> VK_TIMEOUT

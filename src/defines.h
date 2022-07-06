@@ -12,5 +12,7 @@
 
 #define INVALID_IDX UINT32_MAX
 
+#define line_id(x) (size_t)((__LINE__ << 16) | x)
+
 #define internal static
 #define global_variable static

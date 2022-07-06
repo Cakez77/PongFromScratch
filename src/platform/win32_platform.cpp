@@ -1,5 +1,3 @@
-#include <windows.h>
-
 #include "platform.h"
 
 // This is the game Layer
@@ -10,6 +8,10 @@
 
 // This is the Assets Layer
 #include "assets/assets.cpp"
+
+// Platform
+#include <windows.h>
+#include <windowsx.h>
 
 // This is the rendering Layer
 #include "renderer/vk_renderer.cpp"
@@ -62,19 +64,19 @@ LRESULT CALLBACK platform_window_callback(HWND window, UINT msg, WPARAM wParam, 
         switch ((int)wParam)
         {
         case 'A':
-            keyID = A_KEY;
+            keyID = KEY_A;
             break;
 
         case 'D':
-            keyID = D_KEY;
+            keyID = KEY_D;
             break;
 
         case 'S':
-            keyID = S_KEY;
+            keyID = KEY_S;
             break;
 
         case 'W':
-            keyID = W_KEY;
+            keyID = KEY_W;
             break;
         }
 
@@ -88,6 +90,38 @@ LRESULT CALLBACK platform_window_callback(HWND window, UINT msg, WPARAM wParam, 
         }
     }
     break;
+
+    case WM_MOUSEMOVE:
+        input.mousePos = input.mousePos;
+        input.mousePos = {(float)GET_X_LPARAM(lParam),
+                          (float)GET_Y_LPARAM(lParam)};
+        break;
+
+    case WM_LBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_MBUTTONUP:
+    case WM_RBUTTONUP:
+    {
+        bool isDown = msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN
+                          ? true
+                          : false;
+
+        KeyID keyID = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP)
+                          ? KEY_LEFT_MOUSE
+                      : (msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP)
+                          ? KEY_MIDDLE_MOUSE
+                          : KEY_RIGHT_MOUSE;
+
+        input.keys[keyID].halfTransitionCount++;
+        input.keys[keyID].isDown = isDown;
+
+        input.mouseClickPos = {(float)GET_X_LPARAM(lParam),
+                               (float)GET_Y_LPARAM(lParam)};
+
+        break;
+    }
 
     case WM_CLOSE:
         running = false;
@@ -221,7 +255,7 @@ int main()
         }
 
         update_ui(&ui);
-        update_game(&gameState, &ui, &input, dt);
+        update_game(&gameState, &input, &ui, dt);
         if (!vk_render(&vkcontext, &gameState, &ui))
         {
             CAKEZ_FATAL("Failed to render Vulkan");
@@ -258,7 +292,7 @@ char *platform_read_file(char *path, uint32_t *length)
         if (GetFileSizeEx(file, &size))
         {
             *length = size.QuadPart;
-            //TODO: Suballocte from main allocation
+            // TODO: Suballocte from main allocation
             result = new char[*length];
 
             DWORD bytesRead;
@@ -327,4 +361,9 @@ void platform_log(const char *msg, TextColor color)
 #endif
 
     WriteConsoleA(consoleHandle, msg, strlen(msg), 0, 0);
+}
+
+void platform_exit_application()
+{
+    running = false;
 }

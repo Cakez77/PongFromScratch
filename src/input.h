@@ -5,6 +5,7 @@
 
 enum KeyID
 {
+    KEY_ESC,
     KEY_LEFT_MOUSE,
     KEY_MIDDLE_MOUSE,
     KEY_RIGHT_MOUSE,

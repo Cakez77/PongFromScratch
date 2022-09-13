@@ -1016,7 +1016,19 @@ bool vk_render(VkContext *vkcontext, GameState *gameState, UIState *ui)
                     {
                         Label l = ui->labels[labelIdx];
 
-                        vk_render_text(vkcontext, rc, l.text, l.pos);
+                        if(l.number != INVALID_NUMBER)
+                        {
+                            char buffer[16] = {};
+
+                            sprintf(buffer, "%d", l.number);
+                            vk_render_text(vkcontext, rc, buffer, l.pos);
+                        }
+
+                        if(l.text)
+                        {
+                            vk_render_text(vkcontext, rc, l.text, l.pos);
+                        }
+
                     }
                 }
             }

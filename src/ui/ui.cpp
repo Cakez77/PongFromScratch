@@ -94,8 +94,25 @@ void do_text(UIState *ui, Vec2 pos, char *text)
     if (ui->labelCount < MAX_LABELS)
     {
         Label *l = &ui->labels[ui->labelCount++];
+        *l = {};
 
         l->text = text;
+        l->pos = pos;
+    }
+    else
+    {
+        CAKEZ_ASSERT(0, "Reached maximum amount of Labels!");
+    }
+}
+
+void do_number(UIState* ui, Vec2 pos, int number)
+{
+    if (ui->labelCount < MAX_LABELS)
+    {
+        Label *l = &ui->labels[ui->labelCount++];
+        *l = {};
+
+        l->number = number;
         l->pos = pos;
     }
     else

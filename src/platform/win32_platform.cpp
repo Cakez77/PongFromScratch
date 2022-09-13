@@ -78,6 +78,10 @@ LRESULT CALLBACK platform_window_callback(HWND window, UINT msg, WPARAM wParam, 
         case 'W':
             keyID = KEY_W;
             break;
+
+        case VK_ESCAPE:
+            keyID = KEY_ESC;
+            break;
         }
 
         if (keyID < KEY_COUNT)

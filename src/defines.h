@@ -11,6 +11,7 @@
 #define ArraySize(arr) sizeof((arr)) / sizeof((arr[0]))
 
 #define INVALID_IDX UINT32_MAX
+#define INVALID_NUMBER INT32_MAX
 
 #define line_id(x) (size_t)((__LINE__ << 16) | x)
 

@@ -7,6 +7,9 @@
 #include "ui/ui.h"
 
 uint32_t constexpr MAX_ENTITIES = 100;
+float constexpr SPEEDUP = 15.0f;
+float constexpr INITIAL_X_VEL = 400.0f;
+float constexpr INITIAL_Y_VEL_PADDLE = 500.0f;
 
 enum Components
 {
@@ -29,7 +32,8 @@ struct Entity
 enum GameStateID
 {
     GAME_STATE_MAIN_MENU,
-    GAME_STATE_RUNNING_LEVEL
+    GAME_STATE_RUNNING_LEVEL,
+    GAME_STATE_SCORE_SCREEN
 };
 
 struct GameState
@@ -37,6 +41,9 @@ struct GameState
     GameStateID gameState;
 
     uint32_t entityCount;
+    float paddleSpeed;
+    int score;
+    float gameTime;
     Entity entities[MAX_ENTITIES];
 };
 
@@ -124,16 +131,37 @@ bool init_game(GameState *gameState, InputState *input)
                       {spriteOffsetBall, ballSize},
                       ASSET_SPRITE_BALL);
     add_component(e, COMPONENT_BALL);
-    e->vel = {500.0f, 250.0f};
+    e->vel = {INITIAL_X_VEL, INITIAL_X_VEL/2.0f};
+    gameState->paddleSpeed = INITIAL_Y_VEL_PADDLE;
 
     return true;
 }
 
 internal void update_level(GameState *gameState, InputState *input, UIState *ui, float dt)
 {
-    float speed = 500.0f;
+    gameState->gameTime += dt;
+    gameState->paddleSpeed += SPEEDUP * dt;
+    float speed = gameState->paddleSpeed;
 
-    do_text(ui, {100.0f, 100.0f}, "Pong from Scratch!");
+    // Input
+    {
+        if(key_pressed_this_frame(input, KEY_ESC))
+        {
+            gameState->gameState = GAME_STATE_MAIN_MENU;
+        }
+    }
+
+    // Time
+    {
+        do_text(ui, {10.0f, 10.0f}, "Time: ");
+        do_number(ui, {85.0f, 10.0f}, (int)gameState->gameTime);
+    }
+
+    // Score
+    {
+        do_text(ui, {200.0f, 10.0f}, "Score: ");
+        do_number(ui, {295.0f, 10.0f}, gameState->score);
+    }
 
     for (uint32_t i = 0; i < gameState->entityCount; i++)
     {
@@ -171,12 +199,12 @@ internal void update_level(GameState *gameState, InputState *input, UIState *ui,
             // We are below the Ball, need to move UP
             if (e->origin.y > ball->origin.y)
             {
-                e->vel.y = -speed;
+                e->vel.y = -speed * 0.9f;
 
                 float yHeading = e->origin.y + e->vel.y * dt;
                 float distanceYToBall = ball->origin.y - e->origin.y;
 
-                if (yHeading < distanceYToBall)
+                if (yHeading < ball->origin.y)
                 {
                     e->origin.y = ball->origin.y;
                 }
@@ -189,12 +217,12 @@ internal void update_level(GameState *gameState, InputState *input, UIState *ui,
             // We are above the Ball, need to move DOWN
             if (e->origin.y < ball->origin.y)
             {
-                e->vel.y = speed;
+                e->vel.y = speed * 0.9f;
 
                 float yHeading = e->origin.y + e->vel.y * dt;
                 float distanceYToBall = ball->origin.y - e->origin.y;
 
-                if (yHeading > distanceYToBall)
+                if (yHeading > ball->origin.y)
                 {
                     e->origin.y = ball->origin.y;
                 }
@@ -207,18 +235,24 @@ internal void update_level(GameState *gameState, InputState *input, UIState *ui,
 
         if (has_component(e, COMPONENT_BALL))
         {
+            // Right Side
             if (e->origin.x + e->boundingBox.offet.x + e->boundingBox.size.x > input->screenSize.x)
             {
                 e->vel.x = -e->vel.x;
 
                 e->origin.x -= 2 * (e->origin.x + e->boundingBox.offet.x + e->boundingBox.size.x - input->screenSize.x);
+
+                gameState->score += (int)speed;
             }
 
+            // Left Side
             if (e->origin.x + e->boundingBox.offet.x < 0.0f)
             {
                 e->vel.x = -e->vel.x;
 
                 e->origin.x -= 2 * (e->origin.x + e->boundingBox.offet.x);
+
+                gameState->gameState = GAME_STATE_SCORE_SCREEN;
             }
 
             if (e->origin.y + e->boundingBox.offet.y + e->boundingBox.size.y > input->screenSize.y)
@@ -342,5 +376,46 @@ void update_game(GameState *gameState, InputState *input, UIState *ui, float dt)
     case GAME_STATE_RUNNING_LEVEL:
         update_level(gameState, input, ui, dt);
         break;
+
+    case GAME_STATE_SCORE_SCREEN:
+    {
+        do_button(ui, input, ASSET_SPRITE_PONG_FROM_SCRATCH_LOGO, line_id(1),
+                  {0.0f, 0.0f, input->screenSize});
+
+        // Score
+        {
+            do_text(ui, {400.0f, 350.0f}, "Score: ");
+            do_number(ui, {495.0f, 350.0f}, gameState->score);
+        }
+        
+        ui->globalLayer++;
+        if (do_button(ui, input, ASSET_SPRITE_BUTTON_64_16, line_id(1),
+                      {400.0f, 400.0f, 196.0f, 48.0f}, "Restart"))
+        {
+            gameState->gameTime = 0.0f;
+            gameState->score = 0;
+            gameState->entityCount = 0;
+
+            init_game(gameState, input);
+
+            gameState->gameState = GAME_STATE_RUNNING_LEVEL;
+        }
+
+        if (do_button(ui, input, ASSET_SPRITE_BUTTON_64_16, line_id(1),
+                      {400.0f, 470.0f, 196.0f, 48.0f}, "Main Menu"))
+        {
+            gameState->gameTime = 0.0f;
+            gameState->score = 0;
+            gameState->entityCount = 0;
+
+            init_game(gameState, input);
+
+            gameState->gameState = GAME_STATE_MAIN_MENU;
+        }
+        ui->globalLayer--;
+        
+        break;
+    }
+
     }
 }
